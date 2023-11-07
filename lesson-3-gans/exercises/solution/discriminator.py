@@ -1,4 +1,6 @@
 from torch import nn
+import torch.nn.utils.spectral_norm as spectral_norm
+
 import numpy as np
 
 
@@ -12,7 +14,7 @@ class Discriminator(nn.Module):
     :param dropout: dropout probability
     """
 
-    def __init__(self, image_size, feat_map_size, num_channels, dropout=0.2):
+    def __init__(self, image_size, feat_map_size, num_channels, dropout=0):
         super(Discriminator, self).__init__()
 
         blocks = []
@@ -28,6 +30,7 @@ class Discriminator(nn.Module):
                     padding=1,
                     dropout=dropout,
                     activation=nn.LeakyReLU(0.2, inplace=True),
+                    batch_norm = False if i==0 else True
                 )
             )
             prev_dim = feat_map_size * (2**i)
@@ -41,6 +44,7 @@ class Discriminator(nn.Module):
                 padding=0,
                 dropout=0,
                 activation=nn.Sigmoid(),
+                batch_norm=False
             )
         )
 
@@ -55,18 +59,21 @@ class Discriminator(nn.Module):
         padding,
         dropout,
         activation,
+        batch_norm = True
     ):
         return nn.Sequential(
-            nn.Conv2d(
-                in_channels,
-                out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                bias=False,
+            spectral_norm(
+                nn.Conv2d(
+                    in_channels,
+                    out_channels,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    padding=padding,
+                    bias=not batch_norm,
+                )
             ),
             nn.Dropout(p=dropout) if dropout > 0 else nn.Identity(),
-            nn.BatchNorm2d(out_channels),
+            nn.BatchNorm2d(out_channels) if batch_norm else nn.Identity(),
             activation,
         )
 

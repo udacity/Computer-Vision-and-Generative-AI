@@ -43,14 +43,14 @@ class Generator(nn.Module):
 
         # Add last layer
         blocks.append(
-            self._get_transpconv_block(feat_map_size, num_channels, 4, 2, 1, nn.Tanh())
+            self._get_transpconv_block(feat_map_size, num_channels, 4, 2, 1, nn.Tanh(), batch_norm=False)
         )
 
         self.model = nn.Sequential(
             *blocks
         )
     
-    def _get_transpconv_block(self, in_channels, out_channels, kernel_size, stride, padding, activation):
+    def _get_transpconv_block(self, in_channels, out_channels, kernel_size, stride, padding, activation, batch_norm=True):
         return nn.Sequential(
             nn.ConvTranspose2d(
                 in_channels, 
@@ -59,7 +59,7 @@ class Generator(nn.Module):
                 stride=stride, 
                 padding=padding
         ),
-            nn.BatchNorm2d(out_channels),
+            nn.BatchNorm2d(out_channels) if batch_norm else nn.Identity(),
             activation
         )
 

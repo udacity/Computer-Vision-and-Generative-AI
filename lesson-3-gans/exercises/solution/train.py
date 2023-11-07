@@ -1,6 +1,8 @@
+import os
 import random
 import argparse
 from pathlib import Path
+from matplotlib import gridspec, pyplot as plt
 
 from torch import nn, optim
 import torch
@@ -12,6 +14,9 @@ from viz import training_tracking
 from diff_augment import DiffAugment
 from generator import Generator
 from discriminator import Discriminator
+
+from torchvision.utils import make_grid
+
 
 
 manualSeed = 42
@@ -138,40 +143,46 @@ def train(
         # Discriminator sees is batch_size (half real and half fake data)
         # just like the Generator
 
-        for real_data_batch in tqdm.tqdm(dataloader):
+        for data in tqdm.tqdm(dataloader):
             
+            ############################
+            # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
+            ###########################
+            ## Train with all-real batch
             D.zero_grad()
             # Format batch
-            real_data_batch = real_data_batch[0].to(device)
-            b_size = real_data_batch.size(0)
+            real_cpu = data[0].to(device)
+            b_size = real_cpu.size(0)
             
+            # label = torch.full((b_size,), real_label, dtype=torch.float, device=device)
             # Random positive numbers between 0.8 and 1.2 (label smoothing)
-            labels = 0.8 + 0.4 * torch.rand(b_size, device=device)
+            label = 0.8 + 0.4 * torch.rand(b_size, device=device)
             
             # Let's flip 10% of the labels to make it slightly harder for the discriminator
-            num_to_flip = int(0.05 * labels.size(0))
+            num_to_flip = int(0.05 * label.size(0))
 
             # Get random indices and set the first "num_to_flip" of them to 0
-            indices = torch.randperm(labels.size(0))[:num_to_flip]
-            labels[indices] = 0
+            indices = torch.randperm(label.size(0))[:num_to_flip]
+            label[indices] = 0
             
             # Forward pass real batch through D
-            output = D(DiffAugment(real_data_batch, policy=policy)).view(-1)
+            output = D(DiffAugment(real_cpu, policy=policy)).view(-1)
             
             # Accuracy for positive
             acc_pos = (output > 0.5).sum() / output.size(0)
             
             # Calculate loss on all-real batch
-            errD_real = criterion(output, labels)
+            errD_real = criterion(output, label)
             # Calculate gradients for D in backward pass
             errD_real.backward()
+            D_x = output.mean().item()
 
             ## Train with all-fake batch
             # Generate batch of latent vectors
             noise = torch.randn(b_size, latent_dimension, 1, 1, device=device)
             # Generate fake image batch with G
             fake = G(noise)
-            labels.fill_(0.0)
+            label.fill_(0.0)
 
             # Classify all fake batch with D
             output = D(DiffAugment(fake, policy=policy).detach()).view(-1)
@@ -180,53 +191,44 @@ def train(
             acc_neg = (output < 0.5).sum() / output.size(0)
             
             # Calculate D's loss on the all-fake batch
-            errD_fake = criterion(output, labels)
+            errD_fake = criterion(output, label)
             # Calculate the gradients for this batch, accumulated (summed) with previous gradients
             errD_fake.backward()
-
+            D_G_z1 = output.mean().item()
             # Compute error of D as sum over the fake and the real batches
-            D_loss = errD_real + errD_fake
+            errD = errD_real + errD_fake
             # Gradient clipping
             #nn.utils.clip_grad_value_(D.parameters(), clip_value=1.0)
             # Update D
             D_optimizer.step()
 
-            # Store current loss
-            batch_D_losses.append(D_loss.item())
-            batch_D_accuracy.append(((acc_pos + acc_neg) / 2).item())
-
-            # Generator training
+            ############################
+            # (2) Update G network: maximize log(D(G(z)))
+            ###########################
             G.zero_grad()
-
-            # Trick suggested by Goodfellow et al. in the original GAN paper:
-            # we want to train G to maximize log(D(G(z))) instead of minimizing
-            # log(1 - D(G(z))) because the latter can saturate. This is obtained by
-            # tricking the loss function to use the second part of the BCELoss
-            # (i.e. log(x)) instead of the first one (i.e. log(1-x))
-            labels.fill_(1.0)
-
-            # D just changed in the previous step, so we need to do another forward pass
-            # through D to get the new predictions on the fake data we already generated
-            # as well as the new one
-            D_pred = D(
-                DiffAugment(fake, policy=policy)
-            ).view(-1)
+            label.fill_(1.0)  # fake labels are real for generator cost
+            # Since we just updated D, perform another forward pass of all-fake batch through D
+            output = D(DiffAugment(fake, policy=policy)).view(-1)
             # Calculate G's loss based on this output
-            G_loss = criterion(D_pred, labels)
+            errG = criterion(output, label)
             # Calculate gradients for G
-            G_loss.backward()
-
-            if gradient_clipping_value > 0:
-                # Gradient clipping
-                nn.utils.clip_grad_value_(
-                    G.parameters(), clip_value=gradient_clipping_value
-                )
-
+            errG.backward()
+            D_G_z2 = output.mean().item()
+            # Gradient clipping
+            #nn.utils.clip_grad_value_(G.parameters(), clip_value=1.0)
             # Update G
             G_optimizer.step()
 
+            # Output training stats
+            # if i % 50 == 0:
+            #     print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\tD(x): %.4f\tD(G(z)): %.4f / %.4f'
+            #           % (epoch, n_epochs, i, len(dataloader),
+            #              errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
+            
             # Save Losses for plotting later
-            batch_G_losses.append(G_loss.item())
+            batch_G_losses.append(errG.item())
+            batch_D_losses.append(errD.item())
+            batch_D_accuracy.append((0.5 * (acc_pos + acc_neg)).item())
 
         G_losses.append(np.mean(batch_G_losses))
         D_losses.append(np.mean(batch_D_losses))
@@ -238,28 +240,74 @@ def train(
             print(
                 f"G loss: {G_losses[-1]:8.2f} | D loss: {D_losses[-1]:8.2f} | D accuracy: {D_acc[-1]:4.3f}"
             )
-
-        if epoch % save_iter == 0:
+        
+        if epoch % 50 == 0:
             with torch.no_grad():
-                fake_viz_data = G(fixed_noise).detach().cpu()
+                fake = G(fixed_noise).detach().cpu()
 
-            if jupyter:
-                from IPython.display import clear_output
-                import matplotlib.pyplot as plt
+            #clear_output(wait=True)
+            fig = plt.figure(dpi=150)
 
-                clear_output(wait=True)
+            gs = gridspec.GridSpec(2, 8)
 
-                fig = training_tracking(D_losses, G_losses, D_acc, fake_viz_data)
+            # Create subplots
+            ax_a = fig.add_subplot(gs[0, :3])  # Top-left subplot
+            ax_b = fig.add_subplot(gs[1, :3])  # Bottom-left subplot
+            ax_c = fig.add_subplot(gs[:, 4:])  # Right subplot spanning both rows
+            
+            subs = [ax_a, ax_b, ax_c]
 
-                plt.show()
+            subs[0].plot(G_losses, label="Generator")
+            subs[0].plot(D_losses, label="Discriminator")
+            subs[0].legend()
+            subs[0].set_ylabel("Loss")
+    #         subs[0].set_title("Losses")
+            
+            subs[1].plot(D_acc)
+            subs[1].set_ylabel("D accuracy")
 
-            else:
-                fig = training_tracking(D_losses, G_losses, D_acc, fake_viz_data)
+            # Now plot the accuracy
+            # subs[1].plot([D_x, D_G_z1, D_G_z2])
 
-            output_dir.mkdir(parents=True, exist_ok=True)
-            fig.savefig(
-                output_dir / f"training_tracking_{epoch}.png", bbox_inches="tight"
+            subs[2].imshow(
+                np.transpose(
+                    make_grid(
+                        fake.detach().cpu(), 
+                        padding=2,
+                        normalize=True,
+                        nrow=4
+                    ).cpu(),
+                    (1,2,0)
+                )
             )
+            subs[2].axis("off")
+            fig.tight_layout()
+            plt.show()
+
+            os.makedirs("ff", exist_ok=True)
+            fig.savefig(f"ff/epoch_{epoch}.png", bbox_inches='tight')
+
+        # if epoch % save_iter == 0:
+        #     with torch.no_grad():
+        #         fake_viz_data = G(fixed_noise).detach().cpu()
+
+        #     if jupyter:
+        #         from IPython.display import clear_output
+        #         import matplotlib.pyplot as plt
+
+        #         clear_output(wait=True)
+
+        #         fig = training_tracking(D_losses, G_losses, D_acc, fake_viz_data)
+
+        #         plt.show()
+
+        #     else:
+        #         fig = training_tracking(D_losses, G_losses, D_acc, fake_viz_data)
+
+        #     output_dir.mkdir(parents=True, exist_ok=True)
+        #     fig.savefig(
+        #         output_dir / f"training_tracking_{epoch}.png", bbox_inches="tight"
+        #     )
 
 if __name__ == "__main__":
 
@@ -277,7 +325,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-epochs", type=int, required=True, help="Number of epochs for training")
 
     # Default parameters
-    parser.add_argument("--D-dropout", type=float, required=False, help="Dropout for the Discriminator", default=0.2)
+    parser.add_argument("--D-dropout", type=float, required=False, help="Dropout for the Discriminator", default=0)
     parser.add_argument("--policy", type=str, default="color,translation,cutout", help="Policy types")
     parser.add_argument("--smoothing", action='store_true', help="Enable label smoothing")
     parser.add_argument("--random-flip", type=float, default=0.05, help="Random flip probability")
