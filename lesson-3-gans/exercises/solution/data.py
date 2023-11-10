@@ -29,12 +29,12 @@ import torch
 
 #     return dataloader
 
-def collate_fn(batch):
+# def collate_fn(batch):
     
-    return (
-        torch.stack([x[0] for x in batch]), 
-        torch.tensor([x[1] for x in batch])
-    )
+#     return (
+#         torch.stack([x[0] for x in batch]), 
+#         torch.tensor([x[1] for x in batch])
+#     )
 
 
 def get_dataloader(root_path, image_size, batch_size, workers=8):
@@ -61,7 +61,7 @@ def get_dataloader(root_path, image_size, batch_size, workers=8):
         dataset, batch_size=batch_size, shuffle=True, num_workers=workers,
         pin_memory=True, 
         persistent_workers=True if workers > 0 else False,
-        collate_fn=collate_fn
+#         collate_fn=collate_fn
     )
 
     return dataloader
