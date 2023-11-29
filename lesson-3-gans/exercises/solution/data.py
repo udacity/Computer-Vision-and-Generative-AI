@@ -1,6 +1,7 @@
 from multiprocessing import cpu_count
 from torchvision import datasets, transforms
 import torch
+import multiprocessing
 
 
 # def get_dataloader(root_path, image_size, batch_size, workers=8):
@@ -37,7 +38,7 @@ import torch
 #     )
 
 
-def get_dataloader(root_path, image_size, batch_size, workers=8):
+def get_dataloader(root_path, image_size, batch_size, workers=multiprocessing.cpu_count()):
     transform = transforms.Compose(
         [
             transforms.Resize(image_size),
@@ -56,7 +57,8 @@ def get_dataloader(root_path, image_size, batch_size, workers=8):
     )
 
     dataset = torch.utils.data.ConcatDataset([dataset_train, dataset_test])
-
+    
+    print(f"Using {workers} workers")
     dataloader = torch.utils.data.DataLoader(
         dataset, batch_size=batch_size, shuffle=True, num_workers=workers,
         pin_memory=True, 
