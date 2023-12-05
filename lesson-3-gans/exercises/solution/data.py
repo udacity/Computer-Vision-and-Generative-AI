@@ -49,11 +49,11 @@ def get_dataloader(root_path, image_size, batch_size, workers=multiprocessing.cp
     )
 
     dataset_train = datasets.StanfordCars(
-        root=root_path, download=True, split='train', transform=transform
+        root=root_path, download=False, split='train', transform=transform
     )
     
     dataset_test = datasets.StanfordCars(
-        root=root_path, download=True, split='test', transform=transform
+        root=root_path, download=False, split='test', transform=transform
     )
 
     dataset = torch.utils.data.ConcatDataset([dataset_train, dataset_test])
